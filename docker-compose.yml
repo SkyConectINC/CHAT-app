@@ -1,66 +1,73 @@
+version: "3.9"
 
-version: '3.8'
 services:
-  backend:
-    build: ./backend
-    expose:
-      - "3000"
-    environment:
-      - NODE_ENV=${NODE_ENV}
-      - DB_HOST=${DB_HOST}
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME}
-      - JWT_SECRET=${JWT_SECRET}
-      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
-      - CORS_ORIGIN=${CORS_ORIGIN}
-    volumes:
-      - ./backend:/usr/src/app
-      - /usr/src/app/node_modules
-    depends_on:
-      - db
-    networks:
-      - app-network
-    restart: unless-stopped
-  frontend:
-    build: ./frontend
-    expose:
-      - "3000"
-    environment:
-      - REACT_APP_API_URL=${REACT_APP_API_URL}
-      - REACT_APP_WS_URL=${REACT_APP_WS_URL}
-    volumes:
-      - ./frontend:/usr/src/app
-      - /usr/src/app/node_modules
-    depends_on:
-      - backend
-    networks:
-      - app-network
-    restart: unless-stopped
   db:
-    image: postgres:16-alpine
-    environment:
-      - POSTGRES_USER=${DB_USER}
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-      - POSTGRES_DB=${DB_NAME}
+    image: postgres:latest
+    restart: always
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./db-data:/var/lib/postgresql/data
+    env_file:
+      - .env
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 --spider http://backend:3001 || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
-      - app-network
-    restart: unless-stopped
+      - project_root_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    env_file:
+      - .env
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://frontend"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - project_root_network
+
   nginx-proxy-manager:
     image: 'jc21/nginx-proxy-manager:latest'
-    restart: unless-stopped
+    restart: always
     ports:
       - '80:80'
+      - '81:81'
       - '443:443'
     volumes:
-      - ./data:/data
-      - ./letsencrypt:/etc/letsencrypt
+      - ./nginx-proxy-manager/data:/data
+      - ./nginx-proxy-manager/letsencrypt:/etc/letsencrypt
+    depends_on:
+      frontend:
+        condition: service_started
     networks:
-      - app-network
-volumes:
-  postgres_data:
+      - project_root_network
+
 networks:
-  app-network:
-    driver: bridge
+  project_root_network:
+    name: project_root_network
